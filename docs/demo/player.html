@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>python-monorepo demo</title>
+<!--
+  Replays real terminal sessions captured from this repo on a fixed timeline.
+  record.mjs drives it frame by frame (window.seek(t)) and ffmpeg turns the frames
+  into docs/demo.gif and docs/demo.mp4. Open it in a browser to watch it play live.
+-->
+<style>
+  :root {
+    --bg: #0b0f17; --panel: #111722; --border: #232c3b; --text: #d6deeb; --dim: #7d8799;
+    --green: #7ee787; --blue: #79c0ff; --yellow: #f2cc60; --red: #ff7b72; --violet: #d2a8ff;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 960px; height: 600px; overflow: hidden; background: var(--bg); }
+  body { font-family: Inter, "DejaVu Sans", sans-serif; color: var(--text); position: relative; }
+
+  .header { position: absolute; left: 28px; right: 28px; top: 20px; height: 74px; }
+  .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .kicker b { color: var(--accent); font-weight: 600; }
+  .title { font-size: 22px; font-weight: 600; margin-top: 4px; letter-spacing: -.01em; }
+  .sub { font-size: 13.5px; color: var(--dim); margin-top: 5px; min-height: 18px; }
+  .sub em { color: var(--text); font-style: normal; }
+
+  .topo { margin-left: auto; display: flex; align-items: center; gap: 6px;
+          font: 500 11px "JetBrains Mono", monospace; }
+  .node { padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+          color: var(--dim); transition: none; }
+  .node.on { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 3px rgba(88,166,255,.15); }
+  .edge { color: #3a4456; font-size: 9.5px; text-align: center; line-height: 1.05; }
+  .edge.on { color: var(--yellow); }
+
+  .term { position: absolute; left: 28px; right: 28px; top: 108px; bottom: 34px;
+          background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+          overflow: hidden; display: flex; flex-direction: column; }
+  .bar { height: 36px; display: flex; align-items: center; gap: 7px; padding: 0 12px;
+         border-bottom: 1px solid var(--border); flex: none; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: #2d3545; }
+  .bar .name { margin-left: 10px; font: 12px "JetBrains Mono", monospace; color: var(--dim); }
+  .pane { padding: 10px 14px; font: 13px/19px "JetBrains Mono", monospace; white-space: pre-wrap;
+          word-break: break-all; overflow: hidden; }
+  .main { flex: 1; }
+  .logs { flex: none; height: 104px; border-top: 1px solid var(--border); background: #0d121b; }
+  .logs .label { color: var(--violet); font-size: 11.5px; margin-bottom: 4px; }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: var(--text);
+            vertical-align: -3px; }
+
+  .p { color: var(--green); } .c { color: var(--text); } .o { color: #aab4c5; }
+  .g { color: var(--green); } .b { color: var(--blue); } .y { color: var(--yellow); }
+  .r { color: var(--red); } .v { color: var(--violet); } .d { color: var(--dim); }
+  .flash { background: rgba(242,204,96,.12); }
+
+  .progress { position: absolute; left: 28px; right: 28px; bottom: 14px; height: 4px; display: flex; gap: 6px; }
+  .seg { flex: 1; background: #1b2230; border-radius: 2px; overflow: hidden; }
+  .seg i { display: block; height: 100%; background: var(--accent); width: 0; }
+
+  .card { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center;
+          padding: 0 84px; background: var(--bg); }
+  .card h1 { font-size: 44px; letter-spacing: -.02em; font-weight: 700; }
+  .card h1 span { color: var(--accent); }
+  .card p { font-size: 18px; color: var(--dim); margin-top: 12px; line-height: 1.5; }
+  .card ul { list-style: none; margin-top: 26px; }
+  .card li { font-size: 19px; margin: 12px 0; display: flex; gap: 14px; align-items: baseline; }
+  .card li b { font: 600 14px "JetBrains Mono", monospace; color: var(--accent); width: 34px; flex: none; }
+  .card .foot { margin-top: 30px; font: 14px "JetBrains Mono", monospace; color: var(--dim); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="header" id="header">
+    <div class="kicker" id="kicker"></div>
+    <div class="title" id="title"></div>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="term" id="term">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="name" id="termname">~/python-monorepo</span>
+     <div class="topo" id="topo">
+      <div class="node" id="n-catalog">catalog-api</div>
+      <div class="edge" id="e-http">HTTP<br>◀──</div>
+      <div class="node" id="n-orders">orders-api</div>
+      <div class="edge" id="e-pub">event<br>──▶</div>
+      <div class="node" id="n-redis">Redis</div>
+      <div class="edge" id="e-sub">event<br>──▶</div>
+      <div class="node" id="n-worker">notifier-worker</div>
+     </div>
+    </div>
+    <div class="pane main" id="main"></div>
+    <div class="pane logs" id="logs"></div>
+  </div>
+  <div class="progress" id="progress"></div>
+  <div class="card" id="card"></div>
+
+<script>
+// ---------------------------------------------------------------- content
+// Output below is copied verbatim from real runs (only colour markup added).
+// Markup: [g]..[/] green, [b] blue, [y] yellow, [r] red, [v] violet, [d] dim.
+const ORDER_CMD =
+  `curl -s -X POST localhost:8002/orders -H 'content-type: application/json' \\\n` +
+  `    -d '{"customer_email": "ada@example.com",\n` +
+  `         "items": [{"sku": "MUG-001", "quantity": 2}, {"sku": "BOOK-001", "quantity": 1}]}' \\\n` +
+  `    | jq -c '{id, total_cents, status}'`;
+const BAD_CMD =
+  `curl -s -X POST localhost:8002/orders -H 'content-type: application/json' \\\n` +
+  `    -d '{"customer_email":"ada@example.com","items":[{"sku":"NOPE","quantity":1}]}' -w '\\nHTTP %{http_code}\\n'`;
+
+const SCENES = [
+  { kind: "card", dur: 3.4, html: `
+      <h1>python-<span>monorepo</span></h1>
+      <p>Independently deployable Python services and the libraries they share,<br>
+         in one uv workspace with one lockfile.</p>
+      <div class="foot">3 short demos · real commands · real output</div>` },
+
+  { kind: "term", n: 1, title: "Services talk over HTTP and a queue, not imports",
+    sub: "<em>catalog-api</em>, <em>orders-api</em> and <em>notifier-worker</em> run as separate processes, wired through Redis.",
+    topo: true, logs: true,
+    steps: [
+      { log: "[d]2026-11-04 19:11:07,286[/] INFO [v][notifier-worker][/] notifier_worker.worker: listening on orders.placed", at: 0 },
+      { wait: 0.6 },
+      { cmd: `curl -s localhost:8001/products | jq -c '.[]'`, cps: 40, on: ["n-catalog"] },
+      { out: [
+        `{"sku":"BOOK-001","name":"The Pragmatic Monorepo","price_cents":2999}`,
+        `{"sku":"MUG-001","name":"Coffee mug","price_cents":1250}`,
+        `{"sku":"TEE-001","name":"T-shirt","price_cents":1999}`] },
+      { wait: 1.2 },
+      { sub: "Placing an order: <em>orders-api</em> prices it by calling <em>catalog-api</em>, then publishes an <em>OrderPlaced</em> event." },
+      { cmd: ORDER_CMD, cps: 75, on: ["n-orders"] },
+      { on: ["n-orders", "n-catalog", "e-http"], wait: 0.35 },
+      { out: [`{"id":"2c9e7f49376e4a7ebd4ecc3b43f5cbb2","total_cents":[y]5499[/],"status":"[g]placed[/]"}`],
+        on: ["n-orders", "n-redis", "e-pub"] },
+      { wait: 0.5 },
+      { on: ["n-redis", "n-worker", "e-sub"],
+        log: "[d]2026-11-04 19:11:07,795[/] INFO [v][notifier-worker][/] notifier_worker.worker: [y]notify to=ada@example.com subject='Order 2c9e7f49 confirmed' body='Thanks for your order of 3 item(s). Total: $54.99.'[/]",
+        sub: "…and the worker picks the event off the queue and sends the confirmation." },
+      { wait: 2.2 },
+      { on: [], sub: "Unknown products are rejected, and no event is published." },
+      { cmd: BAD_CMD, cps: 75, on: ["n-orders"] },
+      { on: ["n-orders", "n-catalog", "e-http"], wait: 0.3 },
+      { out: [`{"detail":"unknown product 'NOPE'"}`, `HTTP [r]422[/]`], on: [] },
+      { wait: 2.4 },
+    ] },
+
+  { kind: "term", n: 2, title: "CI tests only what a change can break",
+    sub: "<em>scripts/ci/affected.py</em> maps changed files to members, then adds everything that depends on them.",
+    steps: [
+      { wait: 0.4 },
+      { cmd: `python3 scripts/ci/affected.py --files packages/messaging/src/messaging/broker.py >/dev/null`, cps: 55 },
+      { out: [
+        `  affected: [b]messaging[/] (packages/messaging)`,
+        `  affected: [b]notifier-worker[/] (apps/notifier-worker)`,
+        `  affected: [b]orders-api[/] (apps/orders-api)`],
+        sub: "Change a shared library → it and the <em>2 services</em> that use it are tested. The other 5 members are skipped." },
+      { wait: 2.6 },
+      { cmd: `python3 scripts/ci/affected.py --files apps/orders-api/src/orders_api/service.py >/dev/null`, cps: 55 },
+      { out: [`  affected: [b]orders-api[/] (apps/orders-api)`],
+        sub: "Change one service → only that service is tested." },
+      { wait: 2.2 },
+      { cmd: `python3 scripts/ci/affected.py --files README.md >/dev/null`, cps: 55 },
+      { out: [], sub: "Docs-only change → no test jobs at all (lint still runs)." },
+      { wait: 2.4 },
+    ] },
+
+  { kind: "term", n: 3, title: "A new service, fully wired, in one command",
+    sub: "The <em>new-service</em> Claude Code skill runs this scaffold, then writes the real logic and tests.",
+    steps: [
+      { wait: 0.4 },
+      { cmd: `python3 .claude/skills/new-service/scripts/scaffold.py inventory-api --kind http`, cps: 50 },
+      { out: [
+        `  wrote [g]apps/inventory-api/pyproject.toml[/]`,
+        `  wrote [g]apps/inventory-api/Dockerfile[/]`,
+        `  wrote [g]apps/inventory-api/src/inventory_api/__init__.py[/]`,
+        `  wrote [g]apps/inventory-api/src/inventory_api/py.typed[/]`,
+        `  wrote [g]apps/inventory-api/src/inventory_api/main.py[/]`,
+        `  wrote [g]apps/inventory-api/src/inventory_api/app.py[/]`,
+        `  wrote [g]apps/inventory-api/src/inventory_api/service.py[/]`,
+        `  wrote [g]apps/inventory-api/tests/test_inventory_api.py[/]`,
+        `  wrote [y]pyproject.toml[/]`,
+        `  wrote [y]compose.yaml[/]`,
+        `  compose: http://localhost:8003`], stagger: 0.07,
+        sub: "Package, Dockerfile, starter tests, ruff + mypy config and a <em>compose.yaml</em> entry." },
+      { wait: 1.8 },
+      { cmd: `uv sync --all-packages -q && uv run ruff check . && uv run mypy \\\n    && uv run pytest -q --disable-warnings apps/inventory-api`, cps: 50 },
+      { wait: 0.5 },
+      { out: [`[g]All checks passed![/]`], running: true },
+      { wait: 0.6 },
+      { out: [`[g]Success: no issues found in 41 source files[/]`], running: true },
+      { wait: 0.3 },
+      { out: [`.                                                                        [100%]`,
+               `[g]1 passed[/], 1 warning in 0.27s`],
+        sub: "Lint, strict type checks and tests pass straight away. CI picks the new member up automatically." },
+      { wait: 2.8 },
+    ] },
+
+  { kind: "card", dur: 4.2, html: `
+      <h1>python-<span>monorepo</span></h1>
+      <ul>
+        <li><b>01</b>Each service ships as its own small image; they talk over HTTP and Redis.</li>
+        <li><b>02</b>CI tests only what changed, plus whatever depends on it.</li>
+        <li><b>03</b>New services start fully wired and checked.</li>
+      </ul>
+      <div class="foot">uv sync --all-packages · docker compose up --build · see ARCHITECTURE.md</div>` },
+];
+
+// ---------------------------------------------------------------- timeline
+const PROMPT = "[g]❯[/] ";
+function compile(scene) {
+  // Turn steps into timed events: {t, type, ...}
+  let t = 0; const ev = [];
+  for (const s of scene.steps) {
+    if (s.log !== undefined) ev.push({ t, type: "log", text: s.log });
+    if (s.sub) ev.push({ t, type: "sub", html: s.sub });
+    if (s.on) ev.push({ t, type: "on", ids: s.on });
+    if (s.cmd !== undefined) {
+      const d = s.cmd.length / (s.cps || 40);
+      ev.push({ t, type: "cmd", text: s.cmd, dur: d });
+      t += d + 0.25;
+    }
+    if (s.out) {
+      const st = s.stagger || 0;
+      s.out.forEach((line, i) => ev.push({ t: t + i * st, type: "out", text: line }));
+      if (!s.running) ev.push({ t: t + s.out.length * st, type: "prompt" });
+      t += s.out.length * st + 0.15;
+    }
+    if (s.wait) t += s.wait;
+  }
+  scene.events = ev; scene.dur = t;
+}
+SCENES.forEach(s => s.kind === "term" && compile(s));
+let acc = 0; for (const s of SCENES) { s.start = acc; acc += s.dur; }
+window.DURATION = acc;
+
+// ---------------------------------------------------------------- render
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const mark = s => esc(s).replace(/\[([gbyrvd])\]/g, '<span class="$1">').replace(/\[\/\]/g, "</span>");
+const $ = id => document.getElementById(id);
+
+const bar = $("progress");
+const termScenes = SCENES.filter(s => s.kind === "term");
+termScenes.forEach(() => { const d = document.createElement("div"); d.className = "seg"; d.innerHTML = "<i></i>"; bar.appendChild(d); });
+
+window.seek = function (T) {
+  const scene = SCENES.find(s => T >= s.start && T < s.start + s.dur) || SCENES[SCENES.length - 1];
+  const t = T - scene.start;
+  const isCard = scene.kind === "card";
+  $("card").classList.toggle("hidden", !isCard);
+  ["header", "term", "progress"].forEach(id => $(id).classList.toggle("hidden", isCard));
+  termScenes.forEach((s, i) => {
+    const f = T >= s.start + s.dur ? 1 : T < s.start ? 0 : (T - s.start) / s.dur;
+    bar.children[i].firstChild.style.width = (f * 100).toFixed(2) + "%";
+  });
+  if (isCard) { if ($("card").dataset.k !== String(scene.start)) { $("card").innerHTML = scene.html; $("card").dataset.k = scene.start; } return; }
+
+  $("kicker").innerHTML = `<b>${scene.n} / 3</b> &nbsp;·&nbsp; python-monorepo`;
+  $("title").textContent = scene.title;
+  $("topo").classList.toggle("hidden", !scene.topo);
+  $("logs").classList.toggle("hidden", !scene.logs);
+
+  let sub = scene.sub, on = [], logs = [], lines = [PROMPT], typing = false, lastOut = -1;
+  for (const e of scene.events) {
+    if (e.t > t) break;
+    if (e.type === "sub") sub = e.html;
+    else if (e.type === "on") on = e.ids;
+    else if (e.type === "log") logs.push({ text: e.text, t: e.t });
+    else if (e.type === "out") { lines.push(mark(e.text) + "\n"); lastOut = e.t; }
+    else if (e.type === "prompt") lines.push(PROMPT);
+    else if (e.type === "cmd") {
+      const n = Math.min(e.text.length, Math.floor((t - e.t) / e.dur * e.text.length));
+      const done = t >= e.t + e.dur;
+      lines[lines.length - 1] = mark(lines[lines.length - 1]) + `<span class="c">${esc(e.text.slice(0, n))}</span>` + (done ? "\n" : "");
+      lines[lines.length - 1] = { html: lines[lines.length - 1] };
+      typing = !done;
+    }
+  }
+  $("sub").innerHTML = sub;
+  ["n-catalog", "n-orders", "n-redis", "n-worker", "e-http", "e-pub", "e-sub"]
+    .forEach(id => $(id).classList.toggle("on", on.includes(id)));
+
+  // Compose main pane; the last line gets the cursor (blinks while idle).
+  const html = lines.map(l => typeof l === "string" ? (l === PROMPT ? mark(l) : l) : l.html).join("");
+  const blinkOn = typing || Math.floor(t * 1.8) % 2 === 0;
+  const main = $("main");
+  main.innerHTML = html + (blinkOn ? '<span class="cursor"></span>' : '<span class="cursor" style="opacity:0"></span>');
+  main.scrollTop = main.scrollHeight;
+
+  if (scene.logs) {
+    $("logs").innerHTML = '<div class="label">notifier-worker · logs</div>' +
+      logs.map(l => `<div class="${t - l.t < 1.6 && l.t > 0 ? "flash" : ""}">${mark(l.text)}</div>`).join("");
+  }
+};
+
+// Live playback when opened directly (record.mjs sets ?record to drive frames itself).
+if (!location.search.includes("record")) {
+  const t0 = performance.now();
+  const tick = () => { seek(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(tick); };
+  document.fonts.ready.then(tick);
+}
+</script>
+</body>
+</html>
