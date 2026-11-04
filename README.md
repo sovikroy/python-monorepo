@@ -16,16 +16,18 @@ runtime flow, CI and deployment.
 .
 ├── pyproject.toml          # workspace root (virtual, not published) + ruff/mypy/pytest config
 ├── uv.lock                 # single lockfile for the whole workspace
-├── compose.yaml            # run all services together locally
+├── compose.yaml            # run all services together locally (one profile per broker)
+├── .env, brokers/*.env     # which broker compose starts and BROKER_URL points at
 ├── packages/               # reusable libraries
 │   ├── contracts/          # shared pydantic models: API payloads + events
-│   ├── messaging/          # Broker interface (Redis / in-memory) + typed events
+│   ├── messaging/          # Broker interface + Redis / RabbitMQ / TCP / in-memory backends
 │   ├── servicekit/         # settings, logging, FastAPI app factory with /health
 │   └── core/               # tiny greeting helper used by apps/cli
 └── apps/                   # deployables, each with its own Dockerfile
     ├── catalog-api/        # HTTP: product catalog
     ├── orders-api/         # HTTP: places orders, calls catalog-api, publishes events
     ├── notifier-worker/    # worker: consumes order events, sends notifications
+    ├── tcp-broker/         # optional dependency-free broker server for tcp:// URLs
     └── cli/                # command-line example
 ```
 
@@ -48,6 +50,18 @@ curl -X POST localhost:8002/orders -H 'content-type: application/json' \
      -d '{"customer_email":"ada@example.com","items":[{"sku":"MUG-001","quantity":2}]}'
 docker compose logs notifier-worker   # -> "notify to=ada@example.com ..."
 ```
+
+The services don't care which message broker carries their events; `BROKER_URL` decides.
+Redis is the default. To run the same stack on another broker, pick its env file:
+
+```bash
+docker compose --env-file brokers/rabbitmq.env up --build   # RabbitMQ
+docker compose --env-file brokers/tcp.env up --build        # built-in TCP broker
+docker compose --profile "*" down                           # stop, whichever is running
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md#messaging-a-pluggable-transport) for how the transport
+is plugged in and how to add another one.
 
 ## Everyday commands
 
@@ -109,6 +123,9 @@ rebuild the apps that depend on it. To add a service, copy the closest example a
   from the workspace `pyproject.toml` files, so there is nothing extra to maintain when you
   add a member. A change to a shared file outside any member (root `pyproject.toml`,
   `uv.lock`, the workflow itself, ...) runs every member; Markdown and `docs/` changes run none.
+- **Brokers / end-to-end**: when `packages/messaging` or a service using it changes, the
+  messaging tests also run against real Redis and RabbitMQ, and the compose stack is started
+  once per broker (`scripts/ci/compose_smoke.sh`) to send a real order through it.
 - **CI OK**: a single summary job to mark as required in branch protection; it passes when
   test jobs are skipped because nothing relevant changed.
 

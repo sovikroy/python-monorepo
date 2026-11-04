@@ -53,5 +53,5 @@ def test_run_drains_queue_and_skips_bad_messages() -> None:
             if len(notifier.sent) == 2:
                 stop.set()
 
-    run(broker, StopWhenDrained(), stop)
+    run(broker, StopWhenDrained(), stop, error_backoff=0)
     assert [s[1] for s in notifier.sent] == ["Order first confirmed", "Order second confirmed"]

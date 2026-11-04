@@ -13,6 +13,7 @@ from servicekit.http import create_app
 class Settings(ServiceSettings):
     service_name: str = "orders-api"
     catalog_url: str = "http://localhost:8001"
+    # The scheme picks the transport: redis://, amqp://, tcp:// or memory:// (tests).
     broker_url: str = "memory://"
 
 

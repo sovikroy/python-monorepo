@@ -5,6 +5,13 @@ description = "HTTP service that accepts orders, prices them via catalog-api and
 requires-python = ">=3.13"
 dependencies = ["contracts", "messaging", "servicekit[http]", "httpx>=0.28"]
 
+# Broker client libraries, picked at image build time (Dockerfile ARG BROKER_EXTRAS).
+# The code only uses the `messaging.Broker` interface; BROKER_URL picks the backend.
+# memory:// and tcp:// need no extra.
+[project.optional-dependencies]
+redis = ["messaging[redis]"]
+rabbitmq = ["messaging[rabbitmq]"]
+
 [project.scripts]
 orders-api = "orders_api.main:main"
 

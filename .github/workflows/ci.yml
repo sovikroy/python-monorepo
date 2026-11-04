@@ -82,12 +82,59 @@ jobs:
           # Exit code 5 means "no tests collected"; don't fail a package for that.
           uv run pytest "$PKG_PATH" || [ $? -eq 5 ]
 
+  brokers:
+    # The contract tests in packages/messaging, run against real Redis and RabbitMQ
+    # servers (the unit test job covers memory, fakeredis and TCP only).
+    name: Broker integration (Redis + RabbitMQ)
+    needs: changes
+    if: contains(needs.changes.outputs.packages, '"messaging"')
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4-alpine
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 5s
+          --health-timeout 10s --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages
+      - name: pytest packages/messaging (real brokers)
+        env:
+          MESSAGING_TEST_REDIS_URL: redis://localhost:6379/0
+          MESSAGING_TEST_AMQP_URL: amqp://guest:guest@localhost:5672/
+        run: uv run pytest packages/messaging
+
+  compose:
+    # Build the real images and send an order from orders-api to notifier-worker
+    # through each broker, exactly as `docker compose --env-file brokers/<x>.env up` does.
+    name: End-to-end over ${{ matrix.broker }}
+    needs: changes
+    if: contains(needs.changes.outputs.packages, '"notifier-worker"')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        broker: [redis, rabbitmq, tcp]
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/ci/compose_smoke.sh "${{ matrix.broker }}"
+
   ci-ok:
     # Single required check for branch protection; passes when tests were
     # skipped because nothing relevant changed.
     name: CI OK
     if: always()
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, brokers, compose]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

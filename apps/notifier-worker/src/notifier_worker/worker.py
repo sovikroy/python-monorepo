@@ -40,12 +40,16 @@ def process_one(broker: Broker, notifier: Notifier, timeout: float = 1.0) -> boo
     return True
 
 
-def run(broker: Broker, notifier: Notifier, stop: threading.Event) -> None:
+def run(
+    broker: Broker, notifier: Notifier, stop: threading.Event, error_backoff: float = 1.0
+) -> None:
     """Process events until ``stop`` is set (e.g. on SIGTERM)."""
-    log.info("listening on %s", ORDER_PLACED_TOPIC)
+    log.info("listening on %s via %s", ORDER_PLACED_TOPIC, type(broker).__name__)
     while not stop.is_set():
         try:
             process_one(broker, notifier)
         except Exception:  # keep the worker alive; a real one would dead-letter the event
             log.exception("failed to process event")
+            # Don't spin while the broker is unreachable (restarting, not up yet, ...).
+            stop.wait(error_backoff)
     log.info("stopped")

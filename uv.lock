@@ -17,6 +17,7 @@ members = [
     "orders-api",
     "python-monorepo",
     "servicekit",
+    "tcp-broker",
 ]
 
 [[package]]
@@ -492,14 +493,23 @@ version = "0.1.0"
 source = { editable = "packages/messaging" }
 dependencies = [
     { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+rabbitmq = [
+    { name = "pika" },
+]
+redis = [
     { name = "redis" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pika", marker = "extra == 'rabbitmq'", specifier = ">=1.3" },
     { name = "pydantic", specifier = ">=2.9" },
-    { name = "redis", specifier = ">=5.2" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.2" },
 ]
+provides-extras = ["redis", "rabbitmq"]
 
 [[package]]
 name = "mypy"
@@ -577,12 +587,23 @@ dependencies = [
     { name = "servicekit" },
 ]
 
+[package.optional-dependencies]
+rabbitmq = [
+    { name = "messaging", extra = ["rabbitmq"] },
+]
+redis = [
+    { name = "messaging", extra = ["redis"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "contracts", editable = "packages/contracts" },
     { name = "messaging", editable = "packages/messaging" },
+    { name = "messaging", extras = ["rabbitmq"], marker = "extra == 'rabbitmq'", editable = "packages/messaging" },
+    { name = "messaging", extras = ["redis"], marker = "extra == 'redis'", editable = "packages/messaging" },
     { name = "servicekit", editable = "packages/servicekit" },
 ]
+provides-extras = ["redis", "rabbitmq"]
 
 [[package]]
 name = "opentelemetry-api"
@@ -607,13 +628,24 @@ dependencies = [
     { name = "servicekit", extra = ["http"] },
 ]
 
+[package.optional-dependencies]
+rabbitmq = [
+    { name = "messaging", extra = ["rabbitmq"] },
+]
+redis = [
+    { name = "messaging", extra = ["redis"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "contracts", editable = "packages/contracts" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "messaging", editable = "packages/messaging" },
+    { name = "messaging", extras = ["rabbitmq"], marker = "extra == 'rabbitmq'", editable = "packages/messaging" },
+    { name = "messaging", extras = ["redis"], marker = "extra == 'redis'", editable = "packages/messaging" },
     { name = "servicekit", extras = ["http"], editable = "packages/servicekit" },
 ]
+provides-extras = ["redis", "rabbitmq"]
 
 [[package]]
 name = "packaging"
@@ -631,6 +663,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "pika"
+version = "1.4.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/26/54e0b98a7f60b474cb0a6c05ecf048d4bc8c866e10ab1c82bc83865e7421/pika-1.4.4.tar.gz", hash = "sha256:8cfc8b33a5cb16e733bd60cffca9732c0d1d761ecd80a89f34ed7df2cd38d6d6", size = 154713, upload-time = "2026-08-06T21:33:39.836Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/f3/921170b78779ac3f8b405cb28fce88acca1562ac114072cbf0a115e19bb9/pika-1.4.4-py3-none-any.whl", hash = "sha256:48de960c97a93b55db06b8be4c53eb977c9c8a2754c57cdae9097abcbd70ce04", size = 165275, upload-time = "2026-08-06T21:33:38.449Z" },
 ]
 
 [[package]]
@@ -853,9 +894,11 @@ source = { virtual = "." }
 dev = [
     { name = "fakeredis" },
     { name = "mypy" },
+    { name = "pika" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "redis" },
     { name = "ruff" },
 ]
 
@@ -865,9 +908,11 @@ dev = [
 dev = [
     { name = "fakeredis", specifier = ">=2.26" },
     { name = "mypy", specifier = ">=1.13" },
+    { name = "pika", specifier = ">=1.3" },
     { name = "pre-commit", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "redis", specifier = ">=5.2" },
     { name = "ruff", specifier = ">=0.8" },
 ]
 
@@ -982,6 +1027,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/bb/3d8757f21e9a53d9035c9eb039a777047139a16bfdbedfc7a58241c3d914/starlette-1.10.0.tar.gz", hash = "sha256:b8399098d4c1e3522734f7235dc79b1fc967f96cf139c81e0fa30479e0685f9b", size = 2734356, upload-time = "2026-10-24T15:04:12.342Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/2e/947cfe02def9371c07cd5bf5b6b61c829e9aecb9904db02a66cfafbc1eec/starlette-1.10.0-py3-none-any.whl", hash = "sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4", size = 80571, upload-time = "2026-10-24T15:04:10.371Z" },
+]
+
+[[package]]
+name = "tcp-broker"
+version = "0.1.0"
+source = { editable = "apps/tcp-broker" }
+dependencies = [
+    { name = "messaging" },
+    { name = "servicekit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "messaging", editable = "packages/messaging" },
+    { name = "servicekit", editable = "packages/servicekit" },
 ]
 
 [[package]]
