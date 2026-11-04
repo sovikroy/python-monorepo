@@ -44,6 +44,8 @@ flowchart LR
     root --> rootfiles["pyproject.toml<br/>(workspace + ruff/mypy/pytest config)<br/>uv.lock · compose.yaml · .env"]
     root --> brokers["brokers/<br/>redis.env · rabbitmq.env · tcp.env"]
     root --> ci[".github/workflows/ci.yml<br/>scripts/ci/affected.py<br/>scripts/ci/compose_smoke.sh"]
+    root --> tooling[".claude/skills/new-service/<br/>(scaffold a wired-in service)"]
+    root --> docs["docs/<br/>demo.gif · brokers.gif (+ .mp4)<br/>demo/player.html · demo/record.mjs"]
     root --> pkgs["packages/ (libraries)"]
     root --> apps["apps/ (deployables)"]
 
@@ -161,7 +163,22 @@ The broker is a work queue: each event goes to exactly one worker replica, so ru
 `notifier-worker` replicas spreads the load rather than sending duplicate notifications. Every
 backend keeps that promise, so the flow above is identical whichever broker is configured.
 
+```mermaid
+flowchart LR
+    orders["orders-api<br/>(any number of replicas)"] -->|"publish OrderPlaced #1 #2 #3 #4"| q[("orders.placed queue<br/>Redis list · RabbitMQ queue · tcp-broker FIFO")]
+    q -->|"#1, #3"| w1["notifier-worker replica 1"]
+    q -->|"#2, #4"| w2["notifier-worker replica 2"]
+```
+
+This is a real run (two replicas on the TCP broker, four orders), from
+[`docs/brokers.mp4`](docs/brokers.mp4): replica 1 notified ada and alan, replica 2 grace and
+linus, and nobody was notified twice.
+
 ## Messaging: a pluggable transport
+
+![Demo: the same services on Redis, then on the TCP broker, two worker replicas sharing a queue, and the contract tests](docs/brokers.gif)
+
+<sub>Real commands and output (also as an [MP4](docs/brokers.mp4)). Regenerate with `node docs/demo/record.mjs brokers`.</sub>
 
 `packages/messaging` separates *what* a service does with messages from *how* they travel.
 Services see one abstract class, `Broker`, with `publish(topic, message)`,
@@ -222,6 +239,46 @@ flowchart LR
 | RabbitMQ | `amqp://user:pass@host:5672/vhost` | each message to one consumer | yes (durable queue, persistent messages) | `rabbitmq` extra + a RabbitMQ server |
 | TCP | `tcp://host:7000` | each message to one consumer | no (queues live in the server's memory) | the `tcp-broker` image, no client library |
 
+Swapping is just a matter of where `BROKER_URL` points. Without Docker, using the
+stdlib TCP broker (or `redis-server` and `redis://localhost:6379/0`):
+
+```bash
+uv run tcp-broker &
+export BROKER_URL=tcp://localhost:7000
+PORT=8001 uv run catalog-api &  PORT=8002 uv run orders-api &  uv run notifier-worker &
+# the worker logs: listening on orders.placed via TcpBroker
+```
+
+An unknown scheme fails at start-up, not at the first message:
+`BrokerError: unsupported broker URL 'kafka://localhost:9092'; known schemes: amqp, amqps, memory, redis, rediss, tcp`.
+
+### The TCP broker
+
+`apps/tcp-broker` is a small, standard-library-only server for `tcp://` URLs: no client library,
+no external image. It keeps one FIFO queue per topic in memory and speaks one JSON object per
+line in each direction:
+
+```mermaid
+sequenceDiagram
+    participant P as orders-api<br/>(TcpBroker client)
+    participant S as tcp-broker<br/>(TcpBrokerServer)
+    participant C as notifier-worker<br/>(TcpBroker client)
+
+    C->>S: {"op": "receive", "topic": "orders.placed", "timeout": 1.0}
+    Note over S: queue empty: hold the request<br/>up to timeout (max 30 s)
+    P->>S: {"op": "publish", "topic": "orders.placed", "message": "{...}"}
+    S-->>P: {"ok": true}
+    S-->>C: {"ok": true, "message": "{...}"}
+    Note over S,C: if the reply can't be written (client gone),<br/>the message goes back to the front of the queue
+    C->>S: {"op": "receive", ...}
+    S-->>C: {"ok": true, "message": null} after the timeout
+    Note over S: {"op": "ping"} → {"ok": true} is the Docker HEALTHCHECK<br/>(tcp-broker --check). Errors → {"ok": false, "error": "..."}
+```
+
+Clients hold one connection, are thread-safe and reconnect once if the link drops. Because
+queues live in the server's memory, messages are lost if it restarts; use Redis or RabbitMQ
+where that matters.
+
 All four pass the same contract tests (`packages/messaging/tests/test_messaging.py`): FIFO
 order, timeouts, independent topics, large and non-ASCII payloads, and concurrent publishers.
 
@@ -272,22 +329,23 @@ flowchart TD
     changes -->|"matrix: affected members"| t1["test messaging"]
     changes --> t2["test orders-api"]
     changes --> t3["test notifier-worker"]
+    changes --> t4["test tcp-broker"]
     changes -.->|"unaffected members skipped"| skip["(no job)"]
     changes -->|"messaging affected"| brk["brokers job<br/>contract tests vs real<br/>Redis + RabbitMQ services"]
     changes -->|"notifier-worker affected"| e2e["compose job · matrix<br/>redis · rabbitmq · tcp<br/>scripts/ci/compose_smoke.sh"]
 
-    t1 & t2 & t3 --> ok{"CI OK<br/>(required check)"}
+    t1 & t2 & t3 & t4 --> ok{"CI OK<br/>(required check)"}
     brk & e2e --> ok
     lint --> ok
     ok -->|"all success / skipped"| merge["PR can be merged into main"]
     ok -->|"any failure"| fix["Fix and push again"]
 ```
 
-The matrix shown is what a change to `packages/messaging` produces: messaging plus its
-dependents (tcp-broker too, left out of the picture), while catalog-api, cli and the other
-libraries are skipped. Two more jobs guard the transport: **brokers** runs the messaging
+The matrix shown is what a change to `packages/messaging` produces: messaging plus its three
+dependents, while catalog-api, cli and the other libraries are skipped. Two more jobs guard the transport: **brokers** runs the messaging
 contract tests against real Redis and RabbitMQ containers, and **compose** builds the real
-images and sends an order from `orders-api` to `notifier-worker` over each broker in turn. To see what CI would
+images and sends an order from `orders-api` to `notifier-worker` over each broker in turn. The
+unit test job already covers the in-memory, fakeredis and TCP backends. To see what CI would
 test for your branch, run `python3 scripts/ci/affected.py --base origin/main`.
 
 ## Container build
@@ -448,4 +506,7 @@ To do it by hand:
    so it follows whichever broker is selected, and copy the `redis` / `rabbitmq` extras and
    the `BROKER_EXTRAS` lines from `apps/notifier-worker`.
 
-CI picks the new member up automatically.
+With `--broker` (or for any worker), the scaffold wires the compose entry to the shared
+`*broker-env` / `*broker-depends` anchors and copies the broker extras into the app, so the new
+service follows whichever broker is selected. HTTP services get the next free app port
+(`8003`, `8004`, ...). CI picks the new member up automatically.

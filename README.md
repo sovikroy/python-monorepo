@@ -3,9 +3,11 @@
 A Python monorepo managed as a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/).
 All members share one virtualenv and one `uv.lock`.
 
-![Demo: services talking over HTTP and Redis, CI testing only affected members, and scaffolding a new service](docs/demo.gif)
+![Demo: services talking over HTTP and a broker, swapping Redis for the TCP broker, CI testing only affected members, and scaffolding a new service](docs/demo.gif)
 
-<sub>Real commands and output, replayed by [`docs/demo/player.html`](docs/demo/player.html). Also available as an [MP4](docs/demo.mp4). Regenerate with `node docs/demo/record.mjs`.</sub>
+<sub>Real commands and output, replayed by [`docs/demo/player.html`](docs/demo/player.html). Also available as an [MP4](docs/demo.mp4).
+A second video, [`docs/brokers.gif`](docs/brokers.gif) ([MP4](docs/brokers.mp4)), walks through the pluggable transport:
+Redis, the TCP broker, scaling workers and the contract tests. Regenerate both with `node docs/demo/record.mjs`.</sub>
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for diagrams of the layout, dependency graph,
 runtime flow, CI and deployment.
@@ -18,6 +20,8 @@ runtime flow, CI and deployment.
 ├── uv.lock                 # single lockfile for the whole workspace
 ├── compose.yaml            # run all services together locally (one profile per broker)
 ├── .env, brokers/*.env     # which broker compose starts and BROKER_URL points at
+├── .claude/skills/         # new-service: scaffold a fully wired service (Claude Code skill)
+├── docs/                   # demo videos (+ the player/recorder that renders them)
 ├── packages/               # reusable libraries
 │   ├── contracts/          # shared pydantic models: API payloads + events
 │   ├── messaging/          # Broker interface + Redis / RabbitMQ / TCP / in-memory backends
@@ -58,6 +62,15 @@ Redis is the default. To run the same stack on another broker, pick its env file
 docker compose --env-file brokers/rabbitmq.env up --build   # RabbitMQ
 docker compose --env-file brokers/tcp.env up --build        # built-in TCP broker
 docker compose --profile "*" down                           # stop, whichever is running
+```
+
+Without Docker, run the services with `uv run` and point them at any broker you have, for
+example the built-in TCP broker:
+
+```bash
+uv run tcp-broker &
+export BROKER_URL=tcp://localhost:7000          # or redis://localhost:6379/0
+PORT=8001 uv run catalog-api &  PORT=8002 uv run orders-api &  uv run notifier-worker &
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md#messaging-a-pluggable-transport) for how the transport

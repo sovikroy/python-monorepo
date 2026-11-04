@@ -352,7 +352,9 @@ def append_to_toml_list(text: str, key: str, item: str) -> str:
 
 
 def next_host_port(compose: str) -> int:
-    ports = [int(p) for p in re.findall(r'"(\d+):\d+"', compose)]
+    # Only count app ports (every service listens on 8000 inside its container), so
+    # infrastructure ports such as RabbitMQ's management UI (15672) don't push it up.
+    ports = [int(p) for p in re.findall(r'"(\d+):8000"', compose)]
     return max([8000, *ports]) + 1
 
 
