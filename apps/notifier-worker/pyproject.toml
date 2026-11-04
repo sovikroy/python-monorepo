@@ -6,6 +6,13 @@ requires-python = ">=3.13"
 # Plain `servicekit` (no `http` extra): this worker has no web server.
 dependencies = ["contracts", "messaging", "servicekit"]
 
+# Broker client libraries, picked at image build time (Dockerfile ARG BROKER_EXTRAS).
+# The code only uses the `messaging.Broker` interface; BROKER_URL picks the backend.
+# memory:// and tcp:// need no extra.
+[project.optional-dependencies]
+redis = ["messaging[redis]"]
+rabbitmq = ["messaging[rabbitmq]"]
+
 [project.scripts]
 notifier-worker = "notifier_worker.main:main"
 

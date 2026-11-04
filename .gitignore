@@ -24,3 +24,5 @@ htmlcov/
 
 # Env
 .env
+# ...except the root one, which only holds non-secret compose defaults.
+!/.env

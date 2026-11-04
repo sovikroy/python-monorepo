@@ -11,9 +11,10 @@ The example system is a tiny shop:
 | `apps/catalog-api` | HTTP service | Owns the product list and prices. |
 | `apps/orders-api` | HTTP service | Accepts orders, prices them by calling `catalog-api`, publishes an `OrderPlaced` event. |
 | `apps/notifier-worker` | Background worker | Consumes `OrderPlaced` events and sends a confirmation to the customer. |
+| `apps/tcp-broker` | Broker server | Optional, dependency-free message broker for `tcp://` URLs. |
 | `apps/cli` | Command-line app | The original "hello" example. |
 | `packages/contracts` | Library | Shared pydantic models: API payloads (`Product`, `Order`, ...) and events (`OrderPlaced`). |
-| `packages/messaging` | Library | `Broker` interface with Redis (production) and in-memory (tests) implementations, plus typed `publish_event` / `receive_event`. |
+| `packages/messaging` | Library | Transport-neutral `Broker` interface, backends for Redis, RabbitMQ, TCP and in-memory picked by `BROKER_URL`, plus typed `publish_event` / `receive_event`. |
 | `packages/servicekit` | Library | Settings from env vars, uniform logging, and (with the `http` extra) a FastAPI app factory with `/health`. |
 | `packages/core` | Library | The original greeting helper used by `apps/cli`. |
 
@@ -24,11 +25,14 @@ The example system is a tiny shop:
 2. **Services talk over the network, not through imports.** `orders-api` calls `catalog-api`
    over HTTP and reaches `notifier-worker` through the message broker. What they share is the
    *shape* of the data, in `packages/contracts`.
-3. **One lockfile, one version of each dependency.** Every member resolves against the same
+3. **Infrastructure is a plug, not a dependency.** Services code against the `Broker`
+   interface only. Which broker carries the messages (Redis, RabbitMQ, TCP, ...) is
+   configuration (`BROKER_URL`), so swapping it needs no code change.
+4. **One lockfile, one version of each dependency.** Every member resolves against the same
    `uv.lock`, so there is no "works with my version" drift between services.
-4. **Each app ships alone.** Every app has its own `Dockerfile` that installs only that app and
+5. **Each app ships alone.** Every app has its own `Dockerfile` that installs only that app and
    the libraries it depends on, so each one is built, released and scaled on its own.
-5. **CI tests what a change can break.** A change to a library re-tests the library and every
+6. **CI tests what a change can break.** A change to a library re-tests the library and every
    app that depends on it; untouched members are skipped.
 
 ## Repository layout
@@ -37,8 +41,9 @@ The example system is a tiny shop:
 flowchart LR
     root(["python-monorepo/"])
 
-    root --> rootfiles["pyproject.toml<br/>(workspace + ruff/mypy/pytest config)<br/>uv.lock · compose.yaml"]
-    root --> ci[".github/workflows/ci.yml<br/>scripts/ci/affected.py"]
+    root --> rootfiles["pyproject.toml<br/>(workspace + ruff/mypy/pytest config)<br/>uv.lock · compose.yaml · .env"]
+    root --> brokers["brokers/<br/>redis.env · rabbitmq.env · tcp.env"]
+    root --> ci[".github/workflows/ci.yml<br/>scripts/ci/affected.py<br/>scripts/ci/compose_smoke.sh"]
     root --> pkgs["packages/ (libraries)"]
     root --> apps["apps/ (deployables)"]
 
@@ -50,6 +55,7 @@ flowchart LR
     apps --> catalog["catalog-api/"]
     apps --> orders["orders-api/"]
     apps --> notifier["notifier-worker/"]
+    apps --> tcpb["tcp-broker/"]
     apps --> cli["cli/"]
 
     orders --> member["Every member has the same shape:<br/>pyproject.toml<br/>src/&lt;import_name&gt;/<br/>tests/<br/>Dockerfile (apps only)"]
@@ -66,6 +72,7 @@ flowchart TB
         catalog["catalog-api"]
         orders["orders-api"]
         notifier["notifier-worker"]
+        tcpb["tcp-broker"]
         cli["cli"]
     end
 
@@ -81,6 +88,7 @@ flowchart TB
         settings(["pydantic-settings"])
         fastapi(["fastapi + uvicorn"])
         redis(["redis"])
+        pika(["pika"])
         httpx(["httpx"])
     end
 
@@ -93,23 +101,29 @@ flowchart TB
     notifier --> contracts
     notifier --> messaging
     notifier --> servicekit
+    tcpb --> messaging
+    tcpb --> servicekit
     cli --> core
 
     contracts --> pydantic
     messaging --> pydantic
-    messaging --> redis
+    messaging -. "redis extra" .-> redis
+    messaging -. "rabbitmq extra" .-> pika
     servicekit --> settings
     servicekit -. "http extra only" .-> fastapi
 ```
 
 `notifier-worker` depends on plain `servicekit` (without the `http` extra), so FastAPI and
-uvicorn never end up in its image.
+uvicorn never end up in its image. In the same way, `messaging` itself needs only pydantic:
+the Redis and RabbitMQ client libraries are extras (`messaging[redis]`, `messaging[rabbitmq]`)
+that each app re-exports as its own `redis` / `rabbitmq` extras, and the Dockerfile decides
+which ones go into the image. `tcp-broker` uses neither.
 
 | If you change... | CI tests... |
 | --- | --- |
 | `packages/contracts` | contracts, catalog-api, orders-api, notifier-worker |
-| `packages/messaging` | messaging, orders-api, notifier-worker |
-| `packages/servicekit` | servicekit, catalog-api, orders-api, notifier-worker |
+| `packages/messaging` | messaging, orders-api, notifier-worker, tcp-broker (+ broker integration and end-to-end jobs) |
+| `packages/servicekit` | servicekit, catalog-api, orders-api, notifier-worker, tcp-broker |
 | `packages/core` | core, cli |
 | `apps/orders-api` | orders-api only |
 | root `pyproject.toml`, `uv.lock`, CI files, `compose.yaml` | everything |
@@ -123,7 +137,7 @@ sequenceDiagram
     actor Customer
     participant Orders as orders-api
     participant Catalog as catalog-api
-    participant Redis as Redis (broker)
+    participant Broker as Broker (Redis / RabbitMQ / TCP)
     participant Notifier as notifier-worker
 
     Customer->>Orders: POST /orders {customer_email, items}
@@ -135,16 +149,95 @@ sequenceDiagram
         Orders-->>Customer: 422 unknown product
     else all SKUs found
         Orders->>Orders: compute total, store Order
-        Orders->>Redis: LPUSH orders.placed OrderPlaced(JSON)
+        Orders->>Broker: publish("orders.placed", OrderPlaced JSON)
         Orders-->>Customer: 201 Order
-        Notifier->>Redis: BRPOP orders.placed
-        Redis-->>Notifier: OrderPlaced
+        Notifier->>Broker: receive("orders.placed", timeout=1s)
+        Broker-->>Notifier: OrderPlaced
         Notifier->>Notifier: render message and send it
     end
 ```
 
 The broker is a work queue: each event goes to exactly one worker replica, so running more
-`notifier-worker` replicas spreads the load rather than sending duplicate notifications.
+`notifier-worker` replicas spreads the load rather than sending duplicate notifications. Every
+backend keeps that promise, so the flow above is identical whichever broker is configured.
+
+## Messaging: a pluggable transport
+
+`packages/messaging` separates *what* a service does with messages from *how* they travel.
+Services see one abstract class, `Broker`, with `publish(topic, message)`,
+`receive(topic, timeout)` and `close()`. Each backend implements it on top of one technology:
+
+```mermaid
+classDiagram
+    direction LR
+    class Broker {
+        <<abstract>>
+        +publish(topic, message)
+        +receive(topic, timeout) str | None
+        +close()
+    }
+    class InMemoryBroker {
+        memory://
+        process-local, for tests
+    }
+    class RedisBroker {
+        redis:// rediss://
+        LPUSH / BRPOP on a list
+    }
+    class RabbitMQBroker {
+        amqp:// amqps://
+        durable queue, persistent messages
+    }
+    class TcpBroker {
+        tcp://host:port
+        JSON lines to apps/tcp-broker
+    }
+    Broker <|-- InMemoryBroker
+    Broker <|-- RedisBroker
+    Broker <|-- RabbitMQBroker
+    Broker <|-- TcpBroker
+```
+
+`broker_from_url(settings.broker_url)` reads the URL scheme and builds the matching backend.
+Backends are imported lazily, so an image that left out the RabbitMQ client still starts with
+`redis://` (and fails with a clear "install the `rabbitmq` extra" error if pointed at `amqp://`).
+
+```mermaid
+flowchart LR
+    env["BROKER_URL env var"] --> settings["Settings.broker_url"]
+    settings --> factory{"broker_from_url()<br/>looks at the scheme"}
+    factory -- "memory://" --> mem["InMemoryBroker"]
+    factory -- "redis://" --> red["RedisBroker"] --> r[("Redis")]
+    factory -- "amqp://" --> rab["RabbitMQBroker"] --> q[("RabbitMQ")]
+    factory -- "tcp://" --> tcp["TcpBroker"] --> t[("apps/tcp-broker")]
+    factory -- "anything registered" --> custom["your backend"]
+    mem & red & rab & tcp & custom --> iface[["Broker interface"]]
+    iface --> svc["OrderService / worker loop<br/>(unchanged)"]
+```
+
+| Backend | URL | Delivery | Survives broker restart | Needs |
+| --- | --- | --- | --- | --- |
+| In-memory | `memory://` | one process only | no | nothing (tests) |
+| Redis | `redis://host:6379/0` | each message to one consumer | if Redis persistence is on | `redis` extra + a Redis server |
+| RabbitMQ | `amqp://user:pass@host:5672/vhost` | each message to one consumer | yes (durable queue, persistent messages) | `rabbitmq` extra + a RabbitMQ server |
+| TCP | `tcp://host:7000` | each message to one consumer | no (queues live in the server's memory) | the `tcp-broker` image, no client library |
+
+All four pass the same contract tests (`packages/messaging/tests/test_messaging.py`): FIFO
+order, timeouts, independent topics, large and non-ASCII payloads, and concurrent publishers.
+
+### Adding another broker (Kafka, NATS, SQS, ...)
+
+1. Add `packages/messaging/src/messaging/backends/<name>.py` with a `Broker` subclass and a
+   `from_url(cls, url)` classmethod.
+2. Map its URL scheme in `_BACKENDS` in `messaging/broker.py` (or call
+   `register_backend("nats", NatsBroker.from_url)` from your own code), and add the client
+   library as a new extra in `packages/messaging/pyproject.toml` and the apps' extras.
+3. Add it to the `any_broker` fixture in `packages/messaging/tests/conftest.py`, so the
+   contract tests run against it.
+4. Add a service with a `profiles: [<name>]` entry to `compose.yaml` and a
+   `brokers/<name>.env`, and add it to the `compose` matrix in CI.
+
+No service code changes.
 
 ### Inside a service
 
@@ -160,7 +253,9 @@ flowchart LR
     end
     port1 -- production --> http["HttpCatalog (httpx)"]
     port1 -. tests .-> fake["FakeCatalog"]
-    port2 -- production --> rb["RedisBroker"]
+    port2 -- "BROKER_URL=redis://" --> rb["RedisBroker"]
+    port2 -- "BROKER_URL=amqp://" --> qb["RabbitMQBroker"]
+    port2 -- "BROKER_URL=tcp://" --> tb["TcpBroker"]
     port2 -. tests .-> mb["InMemoryBroker"]
 ```
 
@@ -178,15 +273,21 @@ flowchart TD
     changes --> t2["test orders-api"]
     changes --> t3["test notifier-worker"]
     changes -.->|"unaffected members skipped"| skip["(no job)"]
+    changes -->|"messaging affected"| brk["brokers job<br/>contract tests vs real<br/>Redis + RabbitMQ services"]
+    changes -->|"notifier-worker affected"| e2e["compose job · matrix<br/>redis · rabbitmq · tcp<br/>scripts/ci/compose_smoke.sh"]
 
     t1 & t2 & t3 --> ok{"CI OK<br/>(required check)"}
+    brk & e2e --> ok
     lint --> ok
     ok -->|"all success / skipped"| merge["PR can be merged into main"]
     ok -->|"any failure"| fix["Fix and push again"]
 ```
 
-The matrix shown is what a change to `packages/messaging` produces: messaging plus its two
-dependents, while catalog-api, cli and the other libraries are skipped. To see what CI would
+The matrix shown is what a change to `packages/messaging` produces: messaging plus its
+dependents (tcp-broker too, left out of the picture), while catalog-api, cli and the other
+libraries are skipped. Two more jobs guard the transport: **brokers** runs the messaging
+contract tests against real Redis and RabbitMQ containers, and **compose** builds the real
+images and sends an order from `orders-api` to `notifier-worker` over each broker in turn. To see what CI would
 test for your branch, run `python3 scripts/ci/affected.py --base origin/main`.
 
 ## Container build
@@ -202,8 +303,8 @@ flowchart LR
     end
 
     subgraph builder["Stage 1: builder (uv image)"]
-        s1["uv sync --no-install-workspace --package APP<br/>third-party deps only<br/>(cached until uv.lock changes)"]
-        s2["uv sync --no-editable --package APP<br/>APP + only the libraries it needs"]
+        s1["uv sync --no-install-workspace --package APP --extra ...<br/>third-party deps only<br/>(cached until uv.lock changes)"]
+        s2["uv sync --no-editable --package APP --extra ...<br/>APP + only the libraries it needs"]
         s1 --> s2
     end
 
@@ -211,6 +312,7 @@ flowchart LR
         venv["/app/.venv<br/>non-root user<br/>ENTRYPOINT = APP"]
     end
 
+    arg["build arg BROKER_EXTRAS<br/>default: redis rabbitmq"] -.-> s1 & s2
     lock --> s1
     src --> s2
     s2 -->|"copy .venv only"| venv
@@ -221,13 +323,20 @@ What actually lands in each image:
 | Image | Workspace libraries | Notable third-party |
 | --- | --- | --- |
 | `catalog-api` | contracts, servicekit | fastapi, uvicorn |
-| `orders-api` | contracts, messaging, servicekit | fastapi, uvicorn, httpx, redis |
-| `notifier-worker` | contracts, messaging, servicekit | redis (no web server) |
+| `orders-api` | contracts, messaging, servicekit | fastapi, uvicorn, httpx, + broker clients from `BROKER_EXTRAS` |
+| `notifier-worker` | contracts, messaging, servicekit | broker clients from `BROKER_EXTRAS` (no web server) |
+| `tcp-broker` | messaging, servicekit | none |
 | `cli` | core | none |
 
 ```bash
-docker build -f apps/orders-api/Dockerfile -t orders-api .
+docker build -f apps/orders-api/Dockerfile -t orders-api .            # redis + pika inside
+docker build --build-arg BROKER_EXTRAS=rabbitmq \
+    -f apps/orders-api/Dockerfile -t orders-api:rabbitmq .             # pika only
 ```
+
+By default `BROKER_EXTRAS="redis rabbitmq"`, so one image can be pointed at any broker by
+changing `BROKER_URL` at deploy time. Narrow it if you want the smallest image for the
+broker you actually run; `tcp://` and `memory://` need no extra at all.
 
 ## Deployment
 
@@ -253,7 +362,7 @@ flowchart LR
             w1["pod"]
             w2["pod"]
         end
-        redis[("Redis<br/>orders.placed queue")]
+        broker[("Message broker<br/>Redis, RabbitMQ or tcp-broker<br/>orders.placed queue")]
     end
 
     email(["Email / SMS provider"])
@@ -261,8 +370,8 @@ flowchart LR
     lb -->|"/products"| cat
     lb -->|"/orders"| ord
     ord -->|"HTTP GET /products/{sku}<br/>CATALOG_URL"| cat
-    ord -->|"publish<br/>BROKER_URL"| redis
-    redis -->|"consume"| wrk
+    ord -->|"publish<br/>BROKER_URL"| broker
+    broker -->|"consume<br/>BROKER_URL"| wrk
     wrk --> email
 ```
 
@@ -278,7 +387,37 @@ Configuration is by environment variable only (`servicekit.ServiceSettings`):
 | `LOG_LEVEL` | all | `INFO` |
 | `ENVIRONMENT` | all (shown in `/health`) | `local` |
 | `CATALOG_URL` | orders-api | `http://localhost:8001` |
-| `BROKER_URL` | orders-api, notifier-worker | `memory://` (orders-api), `redis://localhost:6379/0` (worker) |
+| `BROKER_URL` | orders-api, notifier-worker | `memory://` (orders-api), `redis://localhost:6379/0` (worker). The scheme picks the backend: `redis://`, `amqp://`, `tcp://`, `memory://` |
+| `PORT` | tcp-broker | `7000` |
+
+### Choosing the broker with Docker Compose
+
+Each broker is a Compose **profile**, and a small env file per broker sets two variables:
+`COMPOSE_PROFILES` (which broker container to start) and `BROKER_URL` (where the services
+connect). The app images and services stay the same.
+
+```mermaid
+flowchart LR
+    subgraph files["env file you pick"]
+        d[".env (default)<br/>= redis"]
+        fr["brokers/rabbitmq.env"]
+        ft["brokers/tcp.env"]
+    end
+    files --> compose["docker compose up --build"]
+    compose -->|"COMPOSE_PROFILES"| start["starts one of:<br/>redis · rabbitmq · tcp-broker"]
+    compose -->|"BROKER_URL"| apps["orders-api + notifier-worker<br/>(same images)"]
+    apps -->|"depends_on, required: false<br/>waits for the one that is running"| start
+```
+
+```bash
+docker compose up --build                                   # Redis (default, from .env)
+docker compose --env-file brokers/rabbitmq.env up --build   # RabbitMQ (UI on :15672, guest/guest)
+docker compose --env-file brokers/tcp.env up --build        # the stdlib TCP broker
+docker compose --profile "*" down                           # stop, whichever is running
+```
+
+In Kubernetes or any other platform the same rule applies: run the broker you want, and set
+`BROKER_URL` on `orders-api` and `notifier-worker` to point at it.
 
 The example services keep their data in memory to stay dependency-free; a real
 service would put a database behind the same repository class.
@@ -305,5 +444,8 @@ To do it by hand:
    root `pyproject.toml`.
 4. If it exchanges data with other services, put the models in `packages/contracts`.
 5. Run `uv sync --all-packages`, commit the updated `uv.lock`, and add it to `compose.yaml`.
+   If it uses the broker, give it `environment: *broker-env` and `depends_on: *broker-depends`
+   so it follows whichever broker is selected, and copy the `redis` / `rabbitmq` extras and
+   the `BROKER_EXTRAS` lines from `apps/notifier-worker`.
 
 CI picks the new member up automatically.

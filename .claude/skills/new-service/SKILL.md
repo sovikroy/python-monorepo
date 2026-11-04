@@ -61,7 +61,8 @@ The script refuses invalid names, existing members and unknown contracts. It wri
 | `src/<pkg>/worker.py` (worker) | `handle` / `process_one` / `run` consume loop |
 | `tests/test_<pkg>.py` | starter tests (health check / consume loop) |
 | root `pyproject.toml` | adds the import name to ruff `known-first-party` and `apps/<name>/src` to `mypy_path` |
-| `compose.yaml` | service entry; host port = highest used + 1; `BROKER_URL` + redis dependency when needed |
+| `compose.yaml` | service entry; host port = highest used + 1; broker services get the shared `*broker-env` / `*broker-depends` anchors, so they follow whichever broker is selected |
+| `pyproject.toml` + `Dockerfile` (broker services) | `redis` / `rabbitmq` extras and the `BROKER_EXTRAS` build arg, so images can carry any broker client |
 
 CI (`scripts/ci/affected.py`) and the workspace glob pick up the new member automatically.
 Nothing to edit there.

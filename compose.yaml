@@ -1,5 +1,12 @@
-# Run every service locally, wired together like production:
-#   docker compose up --build
+# Run every service locally, wired together like production.
+#
+# Pick the message broker with an env file (each one sets COMPOSE_PROFILES, which
+# starts that broker's container, and BROKER_URL, which points the services at it):
+#   docker compose up --build                                # Redis (from .env)
+#   docker compose --env-file brokers/rabbitmq.env up --build
+#   docker compose --env-file brokers/tcp.env up --build
+# The app images are the same in every case; only BROKER_URL changes.
+#
 # Then try:
 #   curl localhost:8001/products
 #   curl -X POST localhost:8002/orders -H 'content-type: application/json' \
@@ -7,31 +14,67 @@
 #   docker compose logs -f notifier-worker
 # Scale the worker independently:
 #   docker compose up -d --scale notifier-worker=3
+# Stop everything, whichever broker is running:
+#   docker compose --profile "*" down
+
+# Shared by every service that publishes or consumes events.
+x-broker-env: &broker-env
+  BROKER_URL: ${BROKER_URL:-redis://redis:6379/0}
+
+# Wait for whichever broker is running. `required: false` skips the ones whose
+# profile is not enabled, so only the selected broker has to be up.
+x-broker-depends: &broker-depends
+  redis: { condition: service_healthy, required: false }
+  rabbitmq: { condition: service_healthy, required: false }
+  tcp-broker: { condition: service_healthy, required: false }
 
 services:
+  # ------------------------------------------------------------ brokers (pick one)
   redis:
+    profiles: [redis]
     image: redis:7-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
 
+  rabbitmq:
+    profiles: [rabbitmq]
+    image: rabbitmq:4-management-alpine
+    ports: ["15672:15672"] # management UI: http://localhost:15672 (guest / guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+
+  tcp-broker:
+    profiles: [tcp]
+    build: { context: ., dockerfile: apps/tcp-broker/Dockerfile }
+
+  # ------------------------------------------------------------ services
   catalog-api:
     build: { context: ., dockerfile: apps/catalog-api/Dockerfile }
     ports: ["8001:8000"]
 
   orders-api:
-    build: { context: ., dockerfile: apps/orders-api/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/orders-api/Dockerfile
+      args: { BROKER_EXTRAS: "${BROKER_EXTRAS:-redis rabbitmq}" }
     ports: ["8002:8000"]
     environment:
+      <<: *broker-env
       CATALOG_URL: http://catalog-api:8000
-      BROKER_URL: redis://redis:6379/0
     depends_on:
+      <<: *broker-depends
       catalog-api: { condition: service_healthy }
-      redis: { condition: service_healthy }
 
   notifier-worker:
-    build: { context: ., dockerfile: apps/notifier-worker/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/notifier-worker/Dockerfile
+      args: { BROKER_EXTRAS: "${BROKER_EXTRAS:-redis rabbitmq}" }
     environment:
-      BROKER_URL: redis://redis:6379/0
+      <<: *broker-env
     depends_on:
-      redis: { condition: service_healthy }
+      <<: *broker-depends

@@ -35,7 +35,7 @@ version = "0.1.0"
 description = "__DESCRIPTION__"
 requires-python = ">=3.13"
 __DEPS_COMMENT__dependencies = [__DEPS__]
-
+__BROKER_EXTRAS_TOML__
 [project.scripts]
 __NAME__ = "__PKG__.main:main"
 
@@ -55,13 +55,13 @@ DOCKERFILE = """\
 # Build from the repo root so the workspace lockfile and sibling packages are in context:
 #   docker build -f apps/__NAME__/Dockerfile -t __NAME__ .
 # Only this app and the workspace packages it depends on are installed.
-
+__DOCKER_BROKER_DOC__
 ARG PYTHON_VERSION=3.13
 ARG APP=__NAME__
-
+__DOCKER_BROKER_ARG__
 FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-bookworm-slim AS builder
 ARG APP
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
+__DOCKER_BROKER_ARG_STAGE__ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /app
 
 # 1) Third-party deps only (cached layer, rebuilt only when the lock changes).
@@ -70,12 +70,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \\
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \\
     --mount=type=bind,source=packages,target=packages \\
     --mount=type=bind,source=apps,target=apps \\
-    uv sync --frozen --no-dev --no-install-workspace --package ${APP}
+    uv sync --frozen --no-dev --no-install-workspace --package ${APP}__DOCKER_EXTRA_FLAGS__
 
 # 2) This app + its workspace deps, installed as real (non-editable) wheels.
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \\
-    uv sync --frozen --no-dev --no-editable --package ${APP}
+    uv sync --frozen --no-dev --no-editable --package ${APP}__DOCKER_EXTRA_FLAGS__
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 ARG APP
@@ -191,6 +191,7 @@ from servicekit import ServiceSettings, configure_logging
 
 class Settings(ServiceSettings):
     service_name: str = "__NAME__"
+    # The scheme picks the transport: redis://, amqp://, tcp:// or memory://.
     broker_url: str = "redis://localhost:6379/0"
 
 
@@ -204,7 +205,8 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
-    run(broker_from_url(settings.broker_url), stop)
+    with broker_from_url(settings.broker_url) as broker:
+        run(broker, stop)
 
 
 if __name__ == "__main__":
@@ -248,6 +250,7 @@ def run(broker: Broker, stop: threading.Event, handler: Handler = handle) -> Non
             process_one(broker, handler)
         except Exception:  # keep the worker alive; a real one would dead-letter the event
             log.exception("failed to process event")
+            stop.wait(1.0)  # don't spin while the broker is unreachable
     log.info("stopped")
 '''
 
@@ -289,11 +292,25 @@ COMPOSE_HTTP = """
     ports: ["__HOST_PORT__:8000"]
 """
 
+# Uses the anchors defined at the top of compose.yaml, so the service follows whichever
+# broker the env file selects (BROKER_URL + COMPOSE_PROFILES).
 COMPOSE_BROKER = """\
-    environment:
-      BROKER_URL: redis://redis:6379/0
-    depends_on:
-      redis: { condition: service_healthy }
+    environment: *broker-env
+    depends_on: *broker-depends
+"""
+
+BROKER_EXTRAS_TOML = """
+# Broker client libraries, picked at image build time (Dockerfile ARG BROKER_EXTRAS).
+# The code only uses the `messaging.Broker` interface; BROKER_URL picks the backend.
+[project.optional-dependencies]
+redis = ["messaging[redis]"]
+rabbitmq = ["messaging[rabbitmq]"]
+"""
+
+DOCKER_BROKER_DOC = """#
+# BROKER_EXTRAS chooses which broker client libraries go into the image (default: all,
+# so BROKER_URL alone picks redis://, amqp:// or tcp://). memory:// and tcp:// need none.
+#   docker build --build-arg BROKER_EXTRAS=rabbitmq -f apps/__NAME__/Dockerfile -t __NAME__ .
 """
 
 COMPOSE_WORKER = """
@@ -420,6 +437,15 @@ def main() -> int:
             else ""
         ),
         "SOURCES": sources,
+        "BROKER_EXTRAS_TOML": BROKER_EXTRAS_TOML if uses_broker else "",
+        "DOCKER_BROKER_DOC": DOCKER_BROKER_DOC.replace("__NAME__", name) if uses_broker else "",
+        "DOCKER_BROKER_ARG": 'ARG BROKER_EXTRAS="redis rabbitmq"\n' if uses_broker else "",
+        "DOCKER_BROKER_ARG_STAGE": "ARG BROKER_EXTRAS\n" if uses_broker else "",
+        "DOCKER_EXTRA_FLAGS": (
+            ' $(for e in ${BROKER_EXTRAS}; do printf -- "--extra %s " "$e"; done)'
+            if uses_broker
+            else ""
+        ),
         "RUNTIME_EXTRA": "" if is_worker else HTTP_RUNTIME_EXTRA,
         "EVENT": args.event or "",
         "TOPIC": args.topic or "",

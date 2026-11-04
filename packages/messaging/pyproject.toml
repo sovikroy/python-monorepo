@@ -1,9 +1,16 @@
 [project]
 name = "messaging"
 version = "0.1.0"
-description = "Tiny message-broker abstraction (in-memory for tests, Redis in production)."
+description = "Transport-neutral message-broker interface with Redis, RabbitMQ, TCP and in-memory backends."
 requires-python = ">=3.13"
-dependencies = ["pydantic>=2.9", "redis>=5.2"]
+# The core (interface, in-memory and TCP backends) needs nothing beyond pydantic.
+# Client libraries for external brokers are opt-in extras, so an image only carries
+# the ones it can actually use.
+dependencies = ["pydantic>=2.9"]
+
+[project.optional-dependencies]
+redis = ["redis>=5.2"]
+rabbitmq = ["pika>=1.3"]
 
 [build-system]
 requires = ["hatchling"]

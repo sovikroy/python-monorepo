@@ -9,6 +9,9 @@ dependencies = []
 [dependency-groups]
 dev = [
     "fakeredis>=2.26",
+    # Every broker client, so the whole workspace (and every backend) is testable locally.
+    "pika>=1.3",
+    "redis>=5.2",
     "mypy>=1.13",
     "pre-commit>=4.0",
     "pytest>=8.3",
@@ -41,6 +44,7 @@ known-first-party = [
     "catalog_api",
     "orders_api",
     "notifier_worker",
+    "tcp_broker",
 ]
 
 # ---------------------------------------------------------------- mypy
@@ -58,9 +62,14 @@ mypy_path = [
     "apps/catalog-api/src",
     "apps/orders-api/src",
     "apps/notifier-worker/src",
+    "apps/tcp-broker/src",
 ]
 explicit_package_bases = true
 files = ["packages", "apps", "scripts"]
+
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]  # pika ships no type hints
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest
 [tool.pytest.ini_options]

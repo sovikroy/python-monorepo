@@ -11,6 +11,7 @@ from servicekit import ServiceSettings, configure_logging
 
 class Settings(ServiceSettings):
     service_name: str = "notifier-worker"
+    # The scheme picks the transport: redis://, amqp://, tcp:// or memory://.
     broker_url: str = "redis://localhost:6379/0"
 
 
@@ -24,7 +25,8 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
-    run(broker_from_url(settings.broker_url), LogNotifier(), stop)
+    with broker_from_url(settings.broker_url) as broker:
+        run(broker, LogNotifier(), stop)
 
 
 if __name__ == "__main__":
