@@ -20,6 +20,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -299,18 +300,19 @@ COMPOSE_BROKER = """\
     depends_on: *broker-depends
 """
 
+# The broker extras are read from packages/messaging/pyproject.toml (see broker_extras()),
+# so a backend added with the new-broker skill is picked up here automatically.
 BROKER_EXTRAS_TOML = """
 # Broker client libraries, picked at image build time (Dockerfile ARG BROKER_EXTRAS).
 # The code only uses the `messaging.Broker` interface; BROKER_URL picks the backend.
 [project.optional-dependencies]
-redis = ["messaging[redis]"]
-rabbitmq = ["messaging[rabbitmq]"]
+__EXTRA_LINES__
 """
 
 DOCKER_BROKER_DOC = """#
 # BROKER_EXTRAS chooses which broker client libraries go into the image (default: all,
-# so BROKER_URL alone picks redis://, amqp:// or tcp://). memory:// and tcp:// need none.
-#   docker build --build-arg BROKER_EXTRAS=rabbitmq -f apps/__NAME__/Dockerfile -t __NAME__ .
+# so BROKER_URL alone picks the backend). memory:// and tcp:// need none.
+#   docker build --build-arg BROKER_EXTRAS=__FIRST_EXTRA__ -f apps/__NAME__/Dockerfile -t __NAME__ .
 """
 
 COMPOSE_WORKER = """
@@ -371,6 +373,12 @@ def tidy(app_dir: Path) -> None:
             return
 
 
+def broker_extras() -> list[str]:
+    """The optional extras of packages/messaging: one per broker client library."""
+    data = tomllib.loads((ROOT / "packages/messaging/pyproject.toml").read_text())
+    return list(data.get("project", {}).get("optional-dependencies", {}))
+
+
 def contracts_exports() -> set[str]:
     init = ROOT / "packages/contracts/src/contracts/__init__.py"
     return set(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', init.read_text()))
@@ -419,6 +427,7 @@ def main() -> int:
     )
     description = description.replace('"', "'")
     uses_broker = is_worker or args.broker
+    extras = broker_extras() if uses_broker else []
 
     deps = ["contracts"]
     if uses_broker:
@@ -439,9 +448,19 @@ def main() -> int:
             else ""
         ),
         "SOURCES": sources,
-        "BROKER_EXTRAS_TOML": BROKER_EXTRAS_TOML if uses_broker else "",
-        "DOCKER_BROKER_DOC": DOCKER_BROKER_DOC.replace("__NAME__", name) if uses_broker else "",
-        "DOCKER_BROKER_ARG": 'ARG BROKER_EXTRAS="redis rabbitmq"\n' if uses_broker else "",
+        "BROKER_EXTRAS_TOML": (
+            BROKER_EXTRAS_TOML.replace(
+                "__EXTRA_LINES__", "\n".join(f'{e} = ["messaging[{e}]"]' for e in extras)
+            )
+            if uses_broker and extras
+            else ""
+        ),
+        "DOCKER_BROKER_DOC": (
+            DOCKER_BROKER_DOC.replace("__NAME__", name).replace("__FIRST_EXTRA__", extras[0])
+            if uses_broker and extras
+            else ""
+        ),
+        "DOCKER_BROKER_ARG": f'ARG BROKER_EXTRAS="{" ".join(extras)}"\n' if uses_broker else "",
         "DOCKER_BROKER_ARG_STAGE": "ARG BROKER_EXTRAS\n" if uses_broker else "",
         "DOCKER_EXTRA_FLAGS": (
             ' $(for e in ${BROKER_EXTRAS}; do printf -- "--extra %s " "$e"; done)'

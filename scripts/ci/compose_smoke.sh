@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end check of the compose stack with one broker:
-#   scripts/ci/compose_smoke.sh redis|rabbitmq|tcp
+#   scripts/ci/compose_smoke.sh <broker>     (any brokers/<broker>.env, e.g. redis)
 # Starts the stack with brokers/<name>.env, places an order through orders-api and
 # waits for notifier-worker to log the confirmation, then tears everything down.
 set -euo pipefail
 
-broker="${1:?usage: $0 redis|rabbitmq|tcp}"
+broker="${1:?usage: $0 <broker>  (one of: $(cd brokers && ls *.env | sed "s/\.env$//" | tr "\n" " "))}"
 env_file="brokers/${broker}.env"
 [ -f "$env_file" ] || { echo "no such broker env file: $env_file" >&2; exit 2; }
 compose=(docker compose --env-file "$env_file")

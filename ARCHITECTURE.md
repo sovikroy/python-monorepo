@@ -44,7 +44,7 @@ flowchart LR
     root --> rootfiles["pyproject.toml<br/>(workspace + ruff/mypy/pytest config)<br/>uv.lock · compose.yaml · .env"]
     root --> brokers["brokers/<br/>redis.env · rabbitmq.env · tcp.env"]
     root --> ci[".github/workflows/ci.yml<br/>scripts/ci/affected.py<br/>scripts/ci/compose_smoke.sh"]
-    root --> tooling[".claude/skills/new-service/<br/>(scaffold a wired-in service)"]
+    root --> tooling[".claude/skills/<br/>new-service · new-broker<br/>(scaffold a wired-in service or backend)"]
     root --> docs["docs/<br/>demo.gif · brokers.gif (+ .mp4)<br/>demo/player.html · demo/record.mjs"]
     root --> pkgs["packages/ (libraries)"]
     root --> apps["apps/ (deployables)"]
@@ -284,13 +284,24 @@ order, timeouts, independent topics, large and non-ASCII payloads, and concurren
 
 ### Adding another broker (Kafka, NATS, SQS, ...)
 
+With Claude Code, ask it to add the broker: the `new-broker` skill (`.claude/skills/new-broker/`)
+checks that the transport fits the contract, does every step below and verifies the result. The
+wiring alone is one command (`--dry-run` prints the diff first):
+
+```bash
+python3 .claude/skills/new-broker/scripts/scaffold.py nats --title NATS --dependency "nats-py>=2.9" \
+    --image nats:2-alpine --port 4222 --healthcheck "wget -q -O- localhost:8222/healthz"
+```
+
+It leaves you the `publish`/`receive` logic, the backend's own tests and the docs. By hand:
+
 1. Add `packages/messaging/src/messaging/backends/<name>.py` with a `Broker` subclass and a
    `from_url(cls, url)` classmethod.
 2. Map its URL scheme in `_BACKENDS` in `messaging/broker.py` (or call
    `register_backend("nats", NatsBroker.from_url)` from your own code), and add the client
    library as a new extra in `packages/messaging/pyproject.toml` and the apps' extras.
-3. Add it to the `any_broker` fixture in `packages/messaging/tests/conftest.py`, so the
-   contract tests run against it.
+3. Add it to `REAL_BROKERS` (or, for an in-process fake, the `any_broker` params) in
+   `packages/messaging/tests/conftest.py`, so the contract tests run against it.
 4. Add a service with a `profiles: [<name>]` entry to `compose.yaml` and a
    `brokers/<name>.env`, and add it to the `compose` matrix in CI.
 
