@@ -8,6 +8,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "fakeredis>=2.26",
     "mypy>=1.13",
     "pre-commit>=4.0",
     "pytest>=8.3",
@@ -31,14 +32,33 @@ src = ["packages/*/src", "apps/*/src"]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "N", "PT"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["core", "cli"]
+known-first-party = [
+    "core",
+    "contracts",
+    "messaging",
+    "servicekit",
+    "cli",
+    "catalog_api",
+    "orders_api",
+    "notifier_worker",
+]
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
 python_version = "3.13"
 strict = true
+plugins = ["pydantic.mypy"]
 warn_unreachable = true
-mypy_path = "packages/core/src:apps/cli/src"
+mypy_path = [
+    "packages/core/src",
+    "packages/contracts/src",
+    "packages/messaging/src",
+    "packages/servicekit/src",
+    "apps/cli/src",
+    "apps/catalog-api/src",
+    "apps/orders-api/src",
+    "apps/notifier-worker/src",
+]
 explicit_package_bases = true
 files = ["packages", "apps", "scripts"]
 

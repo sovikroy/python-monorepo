@@ -1,0 +1,20 @@
+[project]
+name = "catalog-api"
+version = "0.1.0"
+description = "HTTP service that owns the product catalog."
+requires-python = ">=3.13"
+dependencies = ["contracts", "servicekit[http]"]
+
+[project.scripts]
+catalog-api = "catalog_api.main:main"
+
+[tool.uv.sources]
+contracts = { workspace = true }
+servicekit = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/catalog_api"]

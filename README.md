@@ -3,24 +3,29 @@
 A Python monorepo managed as a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/).
 All members share one virtualenv and one `uv.lock`.
 
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for diagrams of the layout, dependency graph,
+runtime flow, CI and deployment.
+
 ## Layout
 
 ```
 .
-├── pyproject.toml        # workspace root (virtual, not published) + ruff/mypy/pytest config
-├── uv.lock               # single lockfile for the whole workspace
-├── .python-version       # 3.13
-├── packages/             # reusable libraries
-│   └── core/             # example library  -> `import core`
-│       ├── pyproject.toml
-│       ├── src/core/
-│       └── tests/
-└── apps/                 # deployables (services, CLIs, jobs)
-    └── cli/              # example app depending on `core`
-        ├── pyproject.toml
-        ├── src/cli/
-        └── tests/
+├── pyproject.toml          # workspace root (virtual, not published) + ruff/mypy/pytest config
+├── uv.lock                 # single lockfile for the whole workspace
+├── compose.yaml            # run all services together locally
+├── packages/               # reusable libraries
+│   ├── contracts/          # shared pydantic models: API payloads + events
+│   ├── messaging/          # Broker interface (Redis / in-memory) + typed events
+│   ├── servicekit/         # settings, logging, FastAPI app factory with /health
+│   └── core/               # tiny greeting helper used by apps/cli
+└── apps/                   # deployables, each with its own Dockerfile
+    ├── catalog-api/        # HTTP: product catalog
+    ├── orders-api/         # HTTP: places orders, calls catalog-api, publishes events
+    ├── notifier-worker/    # worker: consumes order events, sends notifications
+    └── cli/                # command-line example
 ```
+
+Every member has the same shape: `pyproject.toml`, `src/<import_name>/`, `tests/`.
 
 ## Getting started
 
@@ -28,6 +33,16 @@ All members share one virtualenv and one `uv.lock`.
 uv sync --all-packages        # create .venv with every member + dev tools
 uv run pre-commit install     # enable git hooks
 uv run cli Ada                # -> Hello, Ada!
+```
+
+Run the example services together (needs Docker):
+
+```bash
+docker compose up --build
+curl localhost:8001/products
+curl -X POST localhost:8002/orders -H 'content-type: application/json' \
+     -d '{"customer_email":"ada@example.com","items":[{"sku":"MUG-001","quantity":2}]}'
+docker compose logs notifier-worker   # -> "notify to=ada@example.com ..."
 ```
 
 ## Everyday commands
@@ -70,14 +85,15 @@ repo root so the shared lockfile is used but **only that app and the workspace p
 depends on** are installed (no dev tools, no other apps):
 
 ```bash
+docker build -f apps/orders-api/Dockerfile -t orders-api .
 docker build -f apps/cli/Dockerfile -t cli .
 docker run --rm cli Ada
 ```
 
 Because every app gets its own image, each one can be versioned, released and scaled
 (replicas, autoscaling, resources) on its own. A change to `packages/core` only needs to
-rebuild the apps that depend on it. To add a service, copy `apps/cli/Dockerfile`, change
-`APP` and the `ENTRYPOINT`.
+rebuild the apps that depend on it. To add a service, copy the closest example app (see
+[ARCHITECTURE.md](ARCHITECTURE.md#adding-a-new-service)).
 
 ## CI
 
