@@ -3,6 +3,10 @@
 A Python monorepo managed as a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/).
 All members share one virtualenv and one `uv.lock`.
 
+![Demo: services talking over HTTP and Redis, CI testing only affected members, and scaffolding a new service](docs/demo.gif)
+
+<sub>Real commands and output, replayed by [`docs/demo/player.html`](docs/demo/player.html). Also available as an [MP4](docs/demo.mp4). Regenerate with `node docs/demo/record.mjs`.</sub>
+
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for diagrams of the layout, dependency graph,
 runtime flow, CI and deployment.
 
