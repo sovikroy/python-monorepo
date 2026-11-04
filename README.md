@@ -78,3 +78,23 @@ Because every app gets its own image, each one can be versioned, released and sc
 (replicas, autoscaling, resources) on its own. A change to `packages/core` only needs to
 rebuild the apps that depend on it. To add a service, copy `apps/cli/Dockerfile`, change
 `APP` and the `ENTRYPOINT`.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
+
+- **Lint and type check**: `ruff check`, `ruff format --check` and `mypy` over the whole repo.
+- **Tests**: `pytest` runs only for the members that changed **plus every member that
+  depends on them**, one matrix job per member. `scripts/ci/affected.py` works this out
+  from the workspace `pyproject.toml` files, so there is nothing extra to maintain when you
+  add a member. A change to a shared file outside any member (root `pyproject.toml`,
+  `uv.lock`, the workflow itself, ...) runs every member; Markdown and `docs/` changes run none.
+- **CI OK**: a single summary job to mark as required in branch protection; it passes when
+  test jobs are skipped because nothing relevant changed.
+
+uv's cache is keyed on `uv.lock`, and `UV_LOCKED=1` fails the build if the lockfile is out
+of date. To see what CI would test for your branch:
+
+```bash
+python3 scripts/ci/affected.py --base origin/main
+```
