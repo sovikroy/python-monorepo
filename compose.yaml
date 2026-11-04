@@ -1,0 +1,37 @@
+# Run every service locally, wired together like production:
+#   docker compose up --build
+# Then try:
+#   curl localhost:8001/products
+#   curl -X POST localhost:8002/orders -H 'content-type: application/json' \
+#        -d '{"customer_email":"ada@example.com","items":[{"sku":"MUG-001","quantity":2}]}'
+#   docker compose logs -f notifier-worker
+# Scale the worker independently:
+#   docker compose up -d --scale notifier-worker=3
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  catalog-api:
+    build: { context: ., dockerfile: apps/catalog-api/Dockerfile }
+    ports: ["8001:8000"]
+
+  orders-api:
+    build: { context: ., dockerfile: apps/orders-api/Dockerfile }
+    ports: ["8002:8000"]
+    environment:
+      CATALOG_URL: http://catalog-api:8000
+      BROKER_URL: redis://redis:6379/0
+    depends_on:
+      catalog-api: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  notifier-worker:
+    build: { context: ., dockerfile: apps/notifier-worker/Dockerfile }
+    environment:
+      BROKER_URL: redis://redis:6379/0
+    depends_on:
+      redis: { condition: service_healthy }

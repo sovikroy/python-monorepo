@@ -1,0 +1,22 @@
+[project]
+name = "notifier-worker"
+version = "0.1.0"
+description = "Background worker that sends a confirmation for every placed order."
+requires-python = ">=3.13"
+# Plain `servicekit` (no `http` extra): this worker has no web server.
+dependencies = ["contracts", "messaging", "servicekit"]
+
+[project.scripts]
+notifier-worker = "notifier_worker.main:main"
+
+[tool.uv.sources]
+contracts = { workspace = true }
+messaging = { workspace = true }
+servicekit = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notifier_worker"]
