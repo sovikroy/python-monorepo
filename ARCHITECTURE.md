@@ -285,6 +285,18 @@ service would put a database behind the same repository class.
 
 ## Adding a new service
 
+With Claude Code, ask it to create the service: the `new-service` skill
+(`.claude/skills/new-service/`) does every step below and verifies the result. You can also run
+its scaffold script yourself:
+
+```bash
+python3 .claude/skills/new-service/scripts/scaffold.py inventory-api --kind http --broker
+python3 .claude/skills/new-service/scripts/scaffold.py audit-worker --kind worker \
+    --event OrderPlaced --topic ORDER_PLACED_TOPIC
+```
+
+To do it by hand:
+
 1. Copy the closest example (`apps/catalog-api` for HTTP, `apps/notifier-worker` for a worker)
    to `apps/<name>/` and rename the package, the `[project.scripts]` entry and the
    `src/<import_name>/` directory.
