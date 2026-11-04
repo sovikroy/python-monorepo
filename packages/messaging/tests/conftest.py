@@ -20,8 +20,12 @@ from messaging import Broker, InMemoryBroker, broker_from_url
 from messaging.backends.redis_broker import RedisBroker
 from messaging.backends.tcp import TcpBrokerServer
 
-REDIS_URL = os.environ.get("MESSAGING_TEST_REDIS_URL")
-AMQP_URL = os.environ.get("MESSAGING_TEST_AMQP_URL")
+# Real servers the contract tests also run against: backend -> env var holding its URL.
+# Each one is skipped unless its variable is set. The new-broker skill adds entries here.
+REAL_BROKERS = {
+    "redis": "MESSAGING_TEST_REDIS_URL",
+    "rabbitmq": "MESSAGING_TEST_AMQP_URL",
+}
 
 
 @pytest.fixture
@@ -39,13 +43,12 @@ def tcp_server() -> Iterator[TcpBrokerServer]:
         "memory",
         "fakeredis",
         "tcp",
-        pytest.param(
-            "redis",
-            marks=pytest.mark.skipif(not REDIS_URL, reason="MESSAGING_TEST_REDIS_URL not set"),
-        ),
-        pytest.param(
-            "rabbitmq",
-            marks=pytest.mark.skipif(not AMQP_URL, reason="MESSAGING_TEST_AMQP_URL not set"),
+        *(
+            pytest.param(
+                kind,
+                marks=pytest.mark.skipif(not os.environ.get(var), reason=f"{var} not set"),
+            )
+            for kind, var in REAL_BROKERS.items()
         ),
     ]
 )
@@ -60,12 +63,8 @@ def any_broker(request: pytest.FixtureRequest) -> Iterator[Broker]:
     elif kind == "tcp":
         server: TcpBrokerServer = request.getfixturevalue("tcp_server")
         broker = broker_from_url(f"tcp://127.0.0.1:{server.port}")
-    elif kind == "redis":
-        assert REDIS_URL
-        broker = broker_from_url(REDIS_URL)
     else:
-        assert AMQP_URL
-        broker = broker_from_url(AMQP_URL)
+        broker = broker_from_url(os.environ[REAL_BROKERS[kind]])
     with broker:
         yield broker
 

@@ -34,7 +34,7 @@ Pick the path that matches what you want to do:
 | **Add a new HTTP API or worker** | Scaffold one that is fully wired in (package, Dockerfile, compose, lint/type config, tests): `python3 .claude/skills/new-service/scripts/scaffold.py inventory-api --kind http` (or `--kind worker --event ... --topic ...`). With Claude Code, just ask it to "add a new service"; the bundled `new-service` skill does the whole job. See [Adding a new service](ARCHITECTURE.md#adding-a-new-service). |
 | **Add a shared library** | Create it under `packages/` and depend on it from your apps; see [Adding a member](#adding-a-member). |
 | **Share data between services** | Put request/response models and events in `packages/contracts`, so producer and consumer use the same typed definition. |
-| **Use a different message broker** | Switch between Redis, RabbitMQ and TCP with an env file (see below), or add a new backend (Kafka, NATS, SQS, ...) by implementing the `Broker` interface; see [ARCHITECTURE.md](ARCHITECTURE.md#adding-another-broker-kafka-nats-sqs-). |
+| **Use a different message broker** | Switch between Redis, RabbitMQ and TCP with an env file (see below), or add a new backend (Kafka, NATS, SQS, ...) by implementing the `Broker` interface. The bundled `new-broker` skill wires it into packages, images, compose, tests and CI (ask Claude Code to "add a NATS broker"); see [ARCHITECTURE.md](ARCHITECTURE.md#adding-another-broker-kafka-nats-sqs-). |
 | **Deploy services separately** | Build each app's image on its own and version/scale it independently; see [Deploying services independently](#deploying-services-independently). |
 | **Keep CI fast as the repo grows** | Nothing to do: CI works out which members a change affects from the `pyproject.toml` files. See [CI](#ci). |
 
@@ -55,7 +55,7 @@ runtime flow, CI and deployment.
 ├── uv.lock                 # single lockfile for the whole workspace
 ├── compose.yaml            # run all services together locally (one profile per broker)
 ├── .env, brokers/*.env     # which broker compose starts and BROKER_URL points at
-├── .claude/skills/         # new-service: scaffold a fully wired service (Claude Code skill)
+├── .claude/skills/         # Claude Code skills: new-service and new-broker scaffold fully wired members
 ├── docs/                   # demo videos (+ the player/recorder that renders them)
 ├── packages/               # reusable libraries
 │   ├── contracts/          # shared pydantic models: API payloads + events
