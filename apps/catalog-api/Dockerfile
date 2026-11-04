@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build from the repo root so the workspace lockfile and sibling packages are in context:
-#   docker build -f apps/cli/Dockerfile -t catalog-api .
+#   docker build -f apps/catalog-api/Dockerfile -t catalog-api .
 # Only this app and the workspace packages it depends on are installed.
 
 ARG PYTHON_VERSION=3.13
